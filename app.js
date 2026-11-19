@@ -185,7 +185,35 @@
   const micBtn = $('#mic'), micHint = $('#mic-hint');
   const HINT = micHint.textContent;
   let rec = null, listening = false, baseText = '', gotResult = false, startedAt = 0, retried = false;
-  let silenceTimer = null, endGuard = null;
+  let silenceTimer = null, endGuard = null, usedThisPage = false;
+
+  // 语音诊断记录（设置页里能看到），真机出问题时截图给我
+  const VLOG_KEY = 'jizhang.voicelog';
+  function vlog(msg) {
+    try {
+      const arr = JSON.parse(sessionStorage.getItem(VLOG_KEY) || '[]');
+      const t = new Date();
+      arr.push(`${t.toTimeString().slice(0, 8)} ${msg}`);
+      sessionStorage.setItem(VLOG_KEY, JSON.stringify(arr.slice(-40)));
+    } catch (e) {}
+  }
+  window.__vlog = vlog;
+
+  // iPhone 主屏幕 App 里，语音识别经常“每次打开页面只能用一次”。
+  // 第二次失败时：保存已输入的内容，悄悄刷新页面，再点一次麦克风就能用。
+  const RESET_KEY = 'jizhang.voicereset';
+  function resetVoice(fallbackMsg) {
+    let already = false;
+    try { already = sessionStorage.getItem(RESET_KEY) === '1'; } catch (e) {}
+    if (already) { vlog('重置后仍失败，放弃'); giveUp(fallbackMsg); return; }
+    vlog('自动重置页面');
+    try {
+      sessionStorage.setItem(RESET_KEY, '1');
+      sessionStorage.setItem('jizhang.pending', $('#input').value);
+    } catch (e) { giveUp(fallbackMsg); return; }
+    killRec();
+    location.reload();
+  }
 
   function setListening(on, msg) {
     listening = on;
@@ -205,6 +233,8 @@
     reparse();
   }
   function stopListening() {
+    // 这一页用过一次、这次却一个字都没听到 → 也是 iPhone 的“只能用一次”，重置
+    if (usedThisPage && !gotResult) { vlog('没听到任何声音'); resetVoice('语音没反应，点输入框用键盘上的 🎤 也可以'); return; }
     // 让识别器把最后一句吐出来，最多等 1 秒，还没结束就强制收尾
     if (!rec) return finish();
     try { rec.stop(); } catch (e) {}
@@ -223,6 +253,11 @@
     gotResult = false; startedAt = Date.now();
     r.onresult = e => {
       if (rec !== r) return;
+      if (!gotResult) {
+        vlog('听到声音');
+        usedThisPage = true;
+        try { sessionStorage.removeItem(RESET_KEY); } catch (e) {}
+      }
       gotResult = true;
       let s = '';
       for (let i = 0; i < e.results.length; i++) s += e.results[i][0].transcript;
@@ -233,14 +268,18 @@
     };
     r.onerror = e => {
       if (rec !== r) return;
+      vlog('出错 ' + e.error);
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        giveUp('麦克风没授权。也可以点输入框，用键盘上的 🎤 听写');
+        // 这一页已经成功用过一次 → 多半是 iPhone 的“只能用一次”，不是真的没授权
+        if (usedThisPage) resetVoice('语音用不了了，点输入框用键盘上的 🎤 也可以');
+        else giveUp('麦克风没授权。也可以点输入框，用键盘上的 🎤 听写');
       }
       // 其他错误统一交给 onend 处理
     };
     r.onend = () => {
       if (rec !== r) return;
       const quick = !gotResult && Date.now() - startedAt < 1500;
+      vlog(`结束 识别到=${gotResult} 用时=${Date.now() - startedAt}ms`);
       if (quick && !retried) {
         // 刚启动就结束、什么都没听到 → 就是“第二次失灵”，换个新识别器重来一次
         retried = true;
@@ -248,14 +287,14 @@
         setTimeout(() => { if (listening) startListening(); }, 350);
         return;
       }
-      if (quick) { giveUp('语音没启动成功，点输入框用键盘上的 🎤 也可以'); return; }
+      if (quick) { resetVoice('语音没启动成功，点输入框用键盘上的 🎤 也可以'); return; }
       finish();
     };
     try { r.start(); }
     catch (err) {
       killRec();
       if (!retried) { retried = true; setTimeout(() => { if (listening) startListening(); }, 350); }
-      else giveUp('语音启动失败，请用键盘上的 🎤');
+      else resetVoice('语音启动失败，请用键盘上的 🎤');
       return;
     }
     // 一直没出声，8 秒后自动停
@@ -267,6 +306,7 @@
     baseText = $('#input').value.trim();
     if (baseText) baseText += '，';
     retried = false;
+    vlog('点麦克风' + (usedThisPage ? '（本页第二次以后）' : '') + (navigator.standalone ? ' 主屏幕模式' : ''));
     setListening(true, '正在听…说完停一下，或再点一次麦克风结束');
     startListening();
   };
@@ -412,6 +452,10 @@
     $('#s-learned').innerHTML = learned.length ? learned.map(([k, v]) => `<div class="set-row"><span class="grow">“${esc(k)}” → ${esc(v.category)}</span><button data-forget="${esc(k)}" class="muted">忘掉</button></div>`).join('')
       : '<div class="hint">还没有。识别错的时候在卡片上点一下正确分类，下次说同样的话就会自动分对。</div>';
     $('#s-count').textContent = `共 ${db.tx.length} 条记录`;
+    let vl = [];
+    try { vl = JSON.parse(sessionStorage.getItem('jizhang.voicelog') || '[]'); } catch (e) {}
+    const SRok = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    $('#s-vlog').textContent = `网页语音：${SRok ? '支持' : '不支持'}　主屏幕模式：${navigator.standalone ? '是' : '否'}\n` + (vl.length ? vl.join('\n') : '（还没有记录，用一下麦克风再来看）');
   }
   $('#s-base').onchange = e => { S().base = e.target.value; save(); renderAll(); };
   $('#s-cny').onchange = e => { const v = Number(e.target.value); if (v > 0) { S().rates.CNY = v; save(); renderAll(); } };
@@ -453,6 +497,7 @@
     a.download = name; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
+  $('#s-vlog-clear').onclick = () => { try { sessionStorage.removeItem('jizhang.voicelog'); } catch (e) {} renderSettings(); };
   $('#s-export').onclick = () => download(`记账备份-${today()}.json`, JSON.stringify(db, null, 1), 'application/json');
   $('#s-csv').onclick = () => {
     const q = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
@@ -495,6 +540,16 @@
   if (q) { $('#input').value = q; history.replaceState(null, '', location.pathname); }
   renderAll();
   if (q) reparse();
+
+  // 语音自动重置后：把刚才说的内容放回来
+  try {
+    const pending = sessionStorage.getItem('jizhang.pending');
+    if (pending != null) {
+      sessionStorage.removeItem('jizhang.pending');
+      if (pending) { $('#input').value = pending; reparse(); }
+      toast('语音已重置，再点一次麦克风就能说');
+    }
+  } catch (e) {}
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     const hadController = !!navigator.serviceWorker.controller;
