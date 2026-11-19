@@ -179,35 +179,99 @@
   $('#examples').onclick = e => { if (e.target.tagName === 'BUTTON') { $('#input').value = e.target.textContent; reparse(); } };
 
   // ---------- 语音 ----------
+  // iPhone Safari 的语音识别有几个坑：说完有时不触发结束事件、第二次启动会立刻失败。
+  // 所以：每次都彻底释放旧的识别器，状态自己管，启动失败自动重试一次。
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null, listening = false, baseText = '';
-  function stopMic() { listening = false; $('#mic').classList.remove('on'); try { rec && rec.stop(); } catch (e) {} }
-  $('#mic').onclick = () => {
-    if (!SR) {
-      $('#input').focus();
-      toast('这个浏览器不支持网页语音，点键盘上的 🎤 用系统听写也一样');
-      return;
-    }
-    if (listening) { stopMic(); return; }
-    rec = new SR();
-    rec.lang = 'zh-CN'; rec.interimResults = true; rec.continuous = false;
-    baseText = $('#input').value.trim();
-    if (baseText) baseText += '，';
-    rec.onresult = e => {
+  const micBtn = $('#mic'), micHint = $('#mic-hint');
+  const HINT = micHint.textContent;
+  let rec = null, listening = false, baseText = '', gotResult = false, startedAt = 0, retried = false;
+  let silenceTimer = null, endGuard = null;
+
+  function setListening(on, msg) {
+    listening = on;
+    micBtn.classList.toggle('on', on);
+    micHint.textContent = msg || HINT;
+  }
+  function killRec() {
+    clearTimeout(silenceTimer); clearTimeout(endGuard);
+    if (!rec) return;
+    const r = rec; rec = null;
+    r.onresult = r.onerror = r.onend = null;
+    try { r.abort(); } catch (e) {}
+  }
+  function finish() {
+    killRec();
+    setListening(false);
+    reparse();
+  }
+  function stopListening() {
+    // 让识别器把最后一句吐出来，最多等 1 秒，还没结束就强制收尾
+    if (!rec) return finish();
+    try { rec.stop(); } catch (e) {}
+    clearTimeout(endGuard);
+    endGuard = setTimeout(finish, 1000);
+  }
+  function giveUp(msg) {
+    killRec(); setListening(false);
+    toast(msg); $('#input').focus();
+  }
+  function startListening() {
+    killRec();
+    const r = new SR();
+    rec = r;
+    r.lang = 'zh-CN'; r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
+    gotResult = false; startedAt = Date.now();
+    r.onresult = e => {
+      if (rec !== r) return;
+      gotResult = true;
       let s = '';
       for (let i = 0; i < e.results.length; i++) s += e.results[i][0].transcript;
       $('#input').value = baseText + s;
       clearTimeout(parseTimer); parseTimer = setTimeout(reparse, 150);
+      // 停顿 3 秒自动结束（防止 iPhone 不触发结束事件、按钮一直红着）
+      clearTimeout(silenceTimer); silenceTimer = setTimeout(stopListening, 3000);
     };
-    rec.onerror = e => {
-      stopMic();
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('麦克风没授权。也可以点键盘上的 🎤 用系统听写');
-      else if (e.error !== 'no-speech' && e.error !== 'aborted') toast('语音识别出错：' + e.error);
+    r.onerror = e => {
+      if (rec !== r) return;
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        giveUp('麦克风没授权。也可以点输入框，用键盘上的 🎤 听写');
+      }
+      // 其他错误统一交给 onend 处理
     };
-    rec.onend = () => { stopMic(); reparse(); };
-    try { rec.start(); listening = true; $('#mic').classList.add('on'); }
-    catch (err) { toast('启动语音失败，请用键盘上的 🎤'); }
+    r.onend = () => {
+      if (rec !== r) return;
+      const quick = !gotResult && Date.now() - startedAt < 1500;
+      if (quick && !retried) {
+        // 刚启动就结束、什么都没听到 → 就是“第二次失灵”，换个新识别器重来一次
+        retried = true;
+        killRec();
+        setTimeout(() => { if (listening) startListening(); }, 350);
+        return;
+      }
+      if (quick) { giveUp('语音没启动成功，点输入框用键盘上的 🎤 也可以'); return; }
+      finish();
+    };
+    try { r.start(); }
+    catch (err) {
+      killRec();
+      if (!retried) { retried = true; setTimeout(() => { if (listening) startListening(); }, 350); }
+      else giveUp('语音启动失败，请用键盘上的 🎤');
+      return;
+    }
+    // 一直没出声，8 秒后自动停
+    clearTimeout(silenceTimer); silenceTimer = setTimeout(stopListening, 8000);
+  }
+  micBtn.onclick = () => {
+    if (!SR) { $('#input').focus(); toast('这个浏览器不支持网页语音，点键盘上的 🎤 用系统听写也一样'); return; }
+    if (listening) { stopListening(); return; }
+    baseText = $('#input').value.trim();
+    if (baseText) baseText += '，';
+    retried = false;
+    setListening(true, '正在听…说完停一下，或再点一次麦克风结束');
+    startListening();
   };
+  // 切到后台时把麦克风收掉，回来再点就是全新的一次
+  document.addEventListener('visibilitychange', () => { if (document.hidden && listening) finish(); });
 
   // ---------- 列表 ----------
   function listHTML(txs, emptyText) {
@@ -432,5 +496,14 @@
   renderAll();
   if (q) reparse();
 
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+    // 新版本接管后刷新一次，手机上直接用到最新代码（正在输入时不打断）
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded || $('#input').value || drafts.length || listening) return;
+      reloaded = true; location.reload();
+    });
+  }
 })();
