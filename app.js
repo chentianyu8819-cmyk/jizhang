@@ -40,7 +40,16 @@
   const toBase = (amt, cur) => amt / (S().rates[cur] || 1) * (S().rates[S().base] || 1);
   const fmt = (n, cur) => (SYMBOL[cur] || cur + ' ') + (Math.round(n * 100) / 100).toLocaleString('en', { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const catIcon = (name, type) => ((type === 'income' ? INCOME_CATS : EXPENSE_CATS).find(c => c.name === name) || { icon: type === 'income' ? '💰' : '📦' }).icon;
+  // 分类用一个汉字 + 专属颜色表示
+  const CAT_STYLE = {
+    餐饮: ['餐', '#D9822B'], 交通: ['行', '#2F6FB3'], 购物: ['购', '#B8487A'], 日用: ['日', '#2E8B7A'], 住房: ['住', '#8A6A3F'],
+    通讯: ['讯', '#5B5FC7'], 娱乐: ['娱', '#8B4FB8'], 医疗: ['医', '#C94A4A'], 学习: ['学', '#3F7F9F'], 人情: ['礼', '#C2577E'],
+    旅行: ['旅', '#2A8FB8'], 其他: ['他', '#6B7672'],
+    工资: ['薪', '#2F8F5B'], 奖金: ['奖', '#B88A1E'], 报销退款: ['退', '#2B8C99'], 理财: ['息', '#6E8B2F'], 其他收入: ['收', '#4A8F6A'],
+  };
+  const catStyle = name => CAT_STYLE[name] || [String(name || '?').slice(0, 1), '#6B7672'];
+  const glyph = (name, cls) => { const [g, c] = catStyle(name); return `<span class="glyph ${cls || ''}" style="--c:${c}">${esc(g)}</span>`; };
+  const money = (n, cur) => `<span class="num">${fmt(n, cur)}</span>`;
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const today = () => ymd(new Date());
 
@@ -72,20 +81,24 @@
     const cats = d._catTouched ? all : all.filter(c => c.name === d.category).concat(all.filter(c => c.name !== d.category));
     const accs = S().accounts.map(a => a.name);
     if (d.account && !accs.includes(d.account)) accs.push(d.account);
-    return `<div class="card draft" data-i="${i}">
-      <div class="row">
+    const multi = !editing && drafts.length > 1;
+    return `<div class="draft" data-i="${i}">
+      <div class="draft-top">
         <div class="seg"><button data-k="type" data-v="expense" class="${d.type === 'expense' ? 'on' : ''}">支出</button><button data-k="type" data-v="income" class="${d.type === 'income' ? 'on' : ''}">收入</button></div>
-        <input class="amt grow ${d.type === 'income' ? 'inc' : ''}" data-k="amount" type="number" inputmode="decimal" step="0.01" placeholder="没听到金额，点这里填" value="${d.amount == null ? '' : d.amount}">
-        <select data-k="currency" style="width:auto">${CURRENCIES.map(c => `<option ${c === d.currency ? 'selected' : ''}>${c}</option>`).join('')}</select>
+        <span class="heard grow">${!editing && d.raw ? '听到：' + esc(d.raw) : ''}</span>
+        ${multi ? `<button class="btn ghost small" data-act="remove" style="padding:5px 10px;font-size:12px;border-radius:8px">去掉</button>` : ''}
       </div>
-      <div class="cats">${cats.map(c => `<button class="cat ${c.name === d.category ? 'on' : ''}" data-k="category" data-v="${c.name}">${c.icon} ${c.name}</button>`).join('')}</div>
+      <div class="amt-row">
+        <select data-k="currency" aria-label="币种">${CURRENCIES.map(c => `<option ${c === d.currency ? 'selected' : ''}>${c}</option>`).join('')}</select>
+        <input class="amt grow ${d.type === 'income' ? 'inc' : ''}" data-k="amount" type="number" inputmode="decimal" step="0.01" placeholder="没听到金额，点这里填" value="${d.amount == null ? '' : d.amount}" aria-label="金额">
+      </div>
+      <div class="cats">${cats.map(c => `<button class="cat ${c.name === d.category ? 'on' : ''}" data-k="category" data-v="${c.name}" style="--c:${catStyle(c.name)[1]}">${glyph(c.name, 'sm')}${c.name}</button>`).join('')}</div>
       <div class="fields">
-        <select data-k="account">${accs.map(a => `<option ${a === d.account ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>
-        <input data-k="date" type="date" value="${d.date}" style="grid-column: span 2">
+        <select data-k="account" aria-label="付款方式">${accs.map(a => `<option ${a === d.account ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>
+        <input data-k="date" type="date" value="${d.date}" aria-label="日期">
       </div>
-      <input class="note" data-k="note" placeholder="备注（买了什么）" value="${esc(d.note)}">
-      ${editing ? `<div class="actions"><button class="btn danger" data-act="delete">删除</button><button class="btn ghost" data-act="cancel">取消</button><button class="btn" data-act="save">保存</button></div>`
-        : (drafts.length > 1 ? `<div class="actions"><button class="btn ghost" data-act="remove" style="flex:0 0 auto">去掉这笔</button></div>` : '')}
+      <input class="note" data-k="note" placeholder="备注：买了什么" value="${esc(d.note)}" aria-label="备注">
+      ${editing ? `<div class="actions"><button class="btn danger" data-act="delete" style="flex:0 0 auto">删除</button><button class="btn ghost" data-act="cancel">取消</button><button class="btn" data-act="save">保存</button></div>` : ''}
     </div>`;
   }
 
@@ -175,7 +188,7 @@
     setTimeout(() => { const a = document.querySelectorAll('#drafts .amt'); a[a.length - 1].focus(); }, 0);
   };
   const EXAMPLES = ['午饭麦当劳12块5 PayNow', '昨天打车grab 18刀', '房租一千二 paynow', '咖啡5块5，买菜23块刷卡', '工资到账5000', '支付宝买菜35元'];
-  $('#examples').innerHTML = EXAMPLES.map(x => `<button>${x}</button>`).join('');
+  $('#examples').innerHTML = '<span class="hint" style="flex:none;align-self:center">试试：</span>' + EXAMPLES.map(x => `<button>${x}</button>`).join('');
   $('#examples').onclick = e => { if (e.target.tagName === 'BUTTON') { $('#input').value = e.target.textContent; reparse(); } };
 
   // ---------- 语音 ----------
@@ -323,11 +336,11 @@
       const out = list.filter(t => t.type === 'expense').reduce((s, t) => s + toBase(t.amount, t.currency), 0);
       const d = new Date(date + 'T00:00');
       const label = date === today() ? '今天' : date === ymd(new Date(Date.now() - 864e5)) ? '昨天' : `${d.getMonth() + 1}月${d.getDate()}日 周${wk[d.getDay()]}`;
-      return `<div class="day"><div class="day-h"><span>${label}</span><span>支出 ${fmt(out, S().base)}</span></div>` +
+      return `<div class="day"><div class="day-h"><span>${label}</span><span>${out ? '支出 ' + money(out, S().base) : ''}</span></div>` +
         list.map(t => `<div class="item" data-id="${t.id}">
-          <div class="ico">${catIcon(t.category, t.type)}</div>
+          ${glyph(t.category)}
           <div class="grow"><div class="t">${esc(t.note || t.category)}</div><div class="s">${esc(t.category)} · ${esc(t.account)}</div></div>
-          <div class="m ${t.type === 'income' ? 'inc' : ''}">${t.type === 'income' ? '+' : '-'}${fmt(t.amount, t.currency)}${t.currency !== S().base ? `<small>≈ ${fmt(toBase(t.amount, t.currency), S().base)}</small>` : ''}</div>
+          <div class="m ${t.type === 'income' ? 'inc' : ''}">${t.type === 'income' ? '+' : '−'}${fmt(t.amount, t.currency)}${t.currency !== S().base ? `<small>≈ ${fmt(toBase(t.amount, t.currency), S().base)}</small>` : ''}</div>
         </div>`).join('') + '</div>';
     }).join('');
   }
@@ -343,11 +356,15 @@
     const { out, inc } = monthSum(ym);
     const todayOut = db.tx.filter(t => t.date === today() && t.type === 'expense').reduce((s, t) => s + toBase(t.amount, t.currency), 0);
     const b = S().base;
-    $('#summary').innerHTML = `<div><div class="k">本月支出</div><div class="big">${fmt(out, b)}</div></div>
-      <div><div class="k">今天</div><div class="v">${fmt(todayOut, b)}</div></div>
-      <div><div class="k">本月收入</div><div class="v inc">${fmt(inc, b)}</div></div>`;
+    const m = Number(ym.slice(5));
+    $('#sum-label').textContent = `${m}月支出`;
+    const sym = SYMBOL[b] || b;
+    const amt = fmt(out, b).slice(sym.length);
+    $('#sum-total').innerHTML = `<span class="cur">${esc(sym)}</span>${amt}`;
+    $('#sum-meta').innerHTML = `<span>今天<b>${fmt(todayOut, b)}</b></span><span>收入<b class="inc">${fmt(inc, b)}</b></span><span>共<b>${db.tx.filter(t => t.date.startsWith(ym)).length}</b>笔</span>`;
+    $('#examples').classList.toggle('hidden', db.tx.length >= 3);
     const recent = db.tx.slice().sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt)).slice(0, 40);
-    $('#recent').innerHTML = listHTML(recent, '还没有记录。点上面的麦克风说一句试试 👆');
+    $('#recent').innerHTML = listHTML(recent, '还没有记录。<br>点 <b>麦克风</b> 说一句，比如“午饭 12 块 PayNow”。');
   }
 
   // ---------- 编辑已有记录 ----------
@@ -357,7 +374,7 @@
     const list = [Object.assign({}, t)];
     const bg = document.createElement('div');
     bg.className = 'sheet-bg';
-    bg.innerHTML = `<div class="sheet"><div class="row" style="margin-bottom:4px"><b class="grow">编辑</b>${t.raw ? `<span class="hint">原话：${esc(t.raw)}</span>` : ''}</div><div class="box"></div></div>`;
+    bg.innerHTML = `<div class="sheet"><div class="sheet-title"><b>改这笔账</b>${t.raw ? `<span class="hint">当时说的：${esc(t.raw)}</span>` : ''}</div><div class="box"></div></div>`;
     const box = bg.querySelector('.box');
     const render = () => { box.innerHTML = draftHTML(list[0], 0, true); };
     render();
@@ -398,12 +415,14 @@
   $('#m-prev').onclick = () => shiftMonth(-1);
   $('#m-next').onclick = () => shiftMonth(1);
 
-  function bars(map, total) {
+  function bars(map, total, isCat) {
     const rows = Object.entries(map).sort((a, b) => b[1] - a[1]);
     if (!rows.length) return '<div class="empty">这个月还没有支出</div>';
     const max = rows[0][1];
-    return rows.map(([k, v]) => `<div class="bar-row"><span>${k}</span><div class="bar"><i style="width:${(v / max * 100).toFixed(1)}%"></i></div>
-      <span>${fmt(v, S().base)} <span class="muted" style="font-size:12px">${Math.round(v / total * 100)}%</span></span></div>`).join('');
+    return rows.map(([k, v]) => `<div class="bar-row">
+      <span class="lbl">${isCat ? glyph(k, 'sm') : ''}${esc(k)}</span>
+      <div class="bar"><i style="width:${(v / max * 100).toFixed(1)}%${isCat ? ';--c:' + catStyle(k)[1] : ''}"></i></div>
+      <span class="val">${fmt(v, S().base)}<small>${Math.round(v / total * 100)}%</small></span></div>`).join('');
   }
 
   function renderStats() {
@@ -415,7 +434,7 @@
     const days = new Date(y, m, 0).getDate();
     const isCur = curMonth === today().slice(0, 7);
     const passed = isCur ? new Date().getDate() : days;
-    $('#m-summary').innerHTML = `<div><div class="k">支出</div><div class="big">${fmt(out, b)}</div></div>
+    $('#m-summary').innerHTML = `<div><div class="k">支出</div><div class="v">${fmt(out, b)}</div></div>
       <div><div class="k">收入</div><div class="v inc">${fmt(inc, b)}</div></div>
       <div><div class="k">日均支出</div><div class="v">${fmt(out / passed, b)}</div></div>`;
     const daily = Array(days).fill(0);
@@ -424,14 +443,17 @@
       if (t.type !== 'expense') return;
       const v = toBase(t.amount, t.currency);
       daily[Number(t.date.slice(8)) - 1] += v;
-      const ck = catIcon(t.category, t.type) + ' ' + t.category;
-      cats[ck] = (cats[ck] || 0) + v;
+      cats[t.category] = (cats[t.category] || 0) + v;
       accs[t.account] = (accs[t.account] || 0) + v;
     });
     const dmax = Math.max(...daily, 1);
-    $('#m-daily').innerHTML = daily.map((v, i) => `<i class="${v ? '' : 'zero'}" title="${i + 1}日 ${fmt(v, b)}" style="height:${v ? Math.max(4, v / dmax * 100) : 2}%"></i>`).join('');
-    $('#m-cats').innerHTML = bars(cats, out);
-    $('#m-accs').innerHTML = bars(accs, out);
+    const todayIdx = isCur ? new Date().getDate() - 1 : -1;
+    $('#m-daily').innerHTML = daily.map((v, i) => `<i class="${i === todayIdx ? 'today' : ''}" title="${i + 1}日 ${fmt(v, b)}" style="height:${v ? Math.max(3, v / dmax * 100) : 0}%"></i>`).join('');
+    $('#m-axis').innerHTML = `<span>${m}月1日</span><span>15日</span><span>${days}日</span>`;
+    const peak = daily.indexOf(Math.max(...daily));
+    $('#m-peak').textContent = out ? `最多 ${m}月${peak + 1}日 ${fmt(daily[peak], b)}` : '';
+    $('#m-cats').innerHTML = bars(cats, out, true);
+    $('#m-accs').innerHTML = bars(accs, out, false);
     $('#m-list').innerHTML = listHTML(txs, '这个月没有记录');
   }
 
