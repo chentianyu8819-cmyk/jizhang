@@ -49,6 +49,10 @@
   };
   const catStyle = name => CAT_STYLE[name] || [String(name || '?').slice(0, 1), '#6B7672'];
   const glyph = (name, cls) => { const [g, c] = catStyle(name); return `<span class="glyph ${cls || ''}" style="--c:${c}">${esc(g)}</span>`; };
+  // 小字换算：新币下面显示人民币，人民币下面显示新币，其他币种显示人民币
+  const conv = (amt, from, to) => amt / (S().rates[from] || 1) * (S().rates[to] || 1);
+  const altCur = cur => (cur === 'CNY' ? 'SGD' : 'CNY');
+  const altLine = (amt, cur) => { const a = altCur(cur); return `<small>≈ ${fmt(conv(amt, cur, a), a)}</small>`; };
   const money = (n, cur) => `<span class="num">${fmt(n, cur)}</span>`;
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const today = () => ymd(new Date());
@@ -340,7 +344,7 @@
         list.map(t => `<div class="item" data-id="${t.id}">
           ${glyph(t.category)}
           <div class="grow"><div class="t">${esc(t.note || t.category)}</div><div class="s">${esc(t.category)} · ${esc(t.account)}</div></div>
-          <div class="m ${t.type === 'income' ? 'inc' : ''}">${t.type === 'income' ? '+' : '−'}${fmt(t.amount, t.currency)}${t.currency !== S().base ? `<small>≈ ${fmt(toBase(t.amount, t.currency), S().base)}</small>` : ''}</div>
+          <div class="m ${t.type === 'income' ? 'inc' : ''}">${t.type === 'income' ? '+' : '−'}${fmt(t.amount, t.currency)}${altLine(t.amount, t.currency)}</div>
         </div>`).join('') + '</div>';
     }).join('');
   }
