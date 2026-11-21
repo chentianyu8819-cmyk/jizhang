@@ -365,6 +365,8 @@
     const sym = SYMBOL[b] || b;
     const amt = fmt(out, b).slice(sym.length);
     $('#sum-total').innerHTML = `<span class="cur">${esc(sym)}</span>${amt}`;
+    const ac = altCur(b);
+    $('#sum-alt').textContent = `≈ ${fmt(conv(out, b, ac), ac)}`;
     $('#sum-meta').innerHTML = `<span>今天<b>${fmt(todayOut, b)}</b></span><span>收入<b class="inc">${fmt(inc, b)}</b></span><span>共<b>${db.tx.filter(t => t.date.startsWith(ym)).length}</b>笔</span>`;
     $('#examples').classList.toggle('hidden', db.tx.length >= 3);
     const recent = db.tx.slice().sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt)).slice(0, 40);
